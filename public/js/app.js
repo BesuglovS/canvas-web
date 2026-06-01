@@ -98,6 +98,9 @@ class App {
 
     this.canvasManager.onDrawEnd = (x, y) => {
       if (this.toolsManager.currentTool === "text") return;
+      // Image tool handles rendering separately in placeImage (via async img.onload),
+      // so don't trigger a full re-render here that would race with the image load
+      if (this.toolsManager.currentTool === "image") return;
       const wasDrawing = this.toolsManager.isDrawing;
       this.toolsManager.endDrawing(x, y);
 
@@ -113,11 +116,44 @@ class App {
       this.updateUndoRedoButtons();
     };
 
+    // Size change callback - update eraser preview live when slider moves
+    this.toolsManager.onSizeChange = (newSize) => {
+      if (this.toolsManager.currentTool === "eraser" && this.canvasManager.eraserPreviewVisible) {
+        this.canvasManager.updateEraserPreview(
+          this.canvasManager.eraserPreviewX,
+          this.canvasManager.eraserPreviewY,
+          newSize,
+          true
+        );
+      }
+    };
+
+    // Tool change callback - hide eraser preview when switching away from eraser
+    this.toolsManager.onToolChange = (tool) => {
+      if (tool !== "eraser") {
+        this.canvasManager.updateEraserPreview(0, 0, 0, false);
+      }
+    };
+
     // Image selected callback - store data for placement on canvas click
     this.toolsManager.onImageSelected = (imageData) => {
       this.pendingImageData = imageData;
       // Switch to image tool to show it's active
       this.toolsManager.selectTool("image");
+    };
+
+    // Cursor move callback - used for eraser size preview and other hover effects
+    this.canvasManager.onCursorMove = (x, y) => {
+      if (this.toolsManager.currentTool === "eraser") {
+        this.canvasManager.updateEraserPreview(
+          x,
+          y,
+          this.toolsManager.eraserSize,
+          true
+        );
+      } else {
+        this.canvasManager.updateEraserPreview(0, 0, 0, false);
+      }
     };
 
     // Canvas click callback - used for placing images
@@ -316,6 +352,11 @@ class App {
 
       const tool = this.toolsManager;
       const action = tool.addImageAction(x, y, data, w, h);
+
+      // Cache the already-loaded image directly so preloadImages finds it immediately
+      // and doesn't start a redundant second async load that causes rendering races
+      this.canvasManager.imageCache[action.id] = img;
+
       this.canvasManager.renderAllActions(tool.getActions());
       this.undoRedoManager.clearRedoStack();
       this.updateUndoRedoButtons();

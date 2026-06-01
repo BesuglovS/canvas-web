@@ -6,7 +6,9 @@ const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  maxHttpBufferSize: 5 * 1024 * 1024, // 5MB max message size (for base64 images)
+});
 
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, "canvas-data.json");

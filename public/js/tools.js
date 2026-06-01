@@ -17,7 +17,6 @@ class ToolsManager {
     this.colorPicker = document.getElementById("color-picker");
     this.sizeSlider = document.getElementById("size-slider");
     this.sizeLabel = document.getElementById("size-label");
-    this.clearBtn = document.getElementById("btn-clear");
 
     // Current drawing state
     this.isDrawing = false;
@@ -31,6 +30,8 @@ class ToolsManager {
     this.onActionCreated = null;
     this.onClearRequest = null;
     this.onImageSelected = null;
+    this.onToolChange = null;
+    this.onSizeChange = null;
 
     this.bindEvents();
   }
@@ -58,9 +59,9 @@ class ToolsManager {
         return;
       }
 
-      // Validate file size (max 2MB)
-      if (file.size > 2 * 1024 * 1024) {
-        alert("Image is too large. Maximum size is 2 MB.");
+      // Validate file size (max 1MB - to fit within Socket.IO buffer limits)
+      if (file.size > 1 * 1024 * 1024) {
+        alert("Image is too large. Maximum size is 1 MB.");
         this.imageInput.value = "";
         return;
       }
@@ -88,18 +89,18 @@ class ToolsManager {
     // Size change
     this.sizeSlider.addEventListener("input", (e) => {
       this.size = parseInt(e.target.value);
+      // Keep eraserSize in sync when eraser is active
+      if (this.currentTool === "eraser") {
+        this.eraserSize = this.size;
+      }
       this.sizeLabel.textContent = "Size: " + this.size;
-    });
 
-    // Clear canvas
-    this.clearBtn.addEventListener("click", () => {
-      if (confirm("Clear the entire canvas? This cannot be undone.")) {
-        this.actions = [];
-        if (this.onClearRequest) {
-          this.onClearRequest();
-        }
+      // Notify size change callback (for live preview updates)
+      if (this.onSizeChange) {
+        this.onSizeChange(this.currentTool === "eraser" ? this.eraserSize : this.size);
       }
     });
+
   }
 
   selectTool(tool) {
@@ -124,6 +125,11 @@ class ToolsManager {
         this.sizeSlider.value = this.size;
         this.sizeLabel.textContent = "Size: " + this.size;
       }
+    }
+
+    // Notify on tool change callback
+    if (this.onToolChange) {
+      this.onToolChange(tool);
     }
   }
 

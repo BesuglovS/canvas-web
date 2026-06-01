@@ -7,9 +7,18 @@ class CanvasManager {
     this.canvas = document.getElementById(canvasId);
     this.ctx = this.canvas.getContext("2d");
 
-    // Virtual canvas size
-    this.VIRTUAL_WIDTH = 10000;
-    this.VIRTUAL_HEIGHT = 10000;
+    // Virtual canvas size: 8000 x 2000 (4 sections of 2000x2000)
+    this.VIRTUAL_WIDTH = 8000;
+    this.VIRTUAL_HEIGHT = 2000;
+
+    // Section labels (left to right)
+    this.SECTION_LABELS = ["11 А", "11 Б", "11 В", "11 Г"];
+    this.CELL_SIZE = 2000;
+
+    // Background cell image (nu.png)
+    this.bgImage = null;
+    this.bgImageLoaded = false;
+    this._loadBackgroundPattern();
 
     // Viewport state
     this.offsetX = 0;
@@ -31,6 +40,7 @@ class CanvasManager {
     this.onDrawMove = null;
     this.onDrawEnd = null;
     this.onCanvasClick = null;
+    this.onCursorMove = null;
 
     // Transform (move/resize) state
     this.selectedActionId = null;
@@ -52,8 +62,27 @@ class CanvasManager {
     // Image cache: actionId -> HTMLImageElement
     this.imageCache = {};
 
+    // Eraser preview state
+    this.eraserPreviewVisible = false;
+    this.eraserPreviewX = 0;
+    this.eraserPreviewY = 0;
+    this.eraserPreviewSize = 20;
+
     this.resize();
     this.bindEvents();
+  }
+
+  _loadBackgroundPattern() {
+    const img = new Image();
+    img.onload = () => {
+      this.bgImage = img;
+      this.bgImageLoaded = true;
+      this.render();
+    };
+    img.onerror = () => {
+      this.bgImageLoaded = false;
+    };
+    img.src = "nu.png";
   }
 
   resize() {
@@ -74,6 +103,17 @@ class CanvasManager {
     this.container.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("mousemove", (e) => this.handleMouseMove(e));
     window.addEventListener("mouseup", (e) => this.handleMouseUp(e));
+
+    // Mouse leave container -> hide eraser preview
+    this.container.addEventListener("mouseleave", () => {
+      if (this.eraserPreviewVisible) {
+        this.eraserPreviewVisible = false;
+        this.render();
+      }
+      if (this.onCursorLeave) {
+        this.onCursorLeave();
+      }
+    });
 
     // Keyboard for panning
     window.addEventListener("keydown", (e) => {
@@ -384,8 +424,13 @@ class CanvasManager {
       return;
     }
 
+    // Fire cursor move callback for eraser preview and other hover effects
+    const coords = this.screenToCanvas(e.clientX, e.clientY);
+    if (this.onCursorMove) {
+      this.onCursorMove(coords.x, coords.y);
+    }
+
     if (this.onDrawMove) {
-      const coords = this.screenToCanvas(e.clientX, e.clientY);
       this.onDrawMove(coords.x, coords.y);
     }
   }
@@ -658,8 +703,13 @@ class CanvasManager {
         return;
       }
 
+      // Fire cursor move callback for eraser preview (touch)
+      const coords = this.screenToCanvas(touch.clientX, touch.clientY);
+      if (this.onCursorMove) {
+        this.onCursorMove(coords.x, coords.y);
+      }
+
       if (this.onDrawMove) {
-        const coords = this.screenToCanvas(touch.clientX, touch.clientY);
         this.onDrawMove(coords.x, coords.y);
       }
     } else if (e.touches.length === 2) {
@@ -750,6 +800,15 @@ class CanvasManager {
     }
   }
 
+  // Update eraser preview position and size
+  updateEraserPreview(x, y, size, visible) {
+    this.eraserPreviewVisible = visible;
+    this.eraserPreviewX = x;
+    this.eraserPreviewY = y;
+    this.eraserPreviewSize = size;
+    this.render();
+  }
+
   // Preload image and cache it, then call callback when ready
   loadImage(action, callback) {
     if (this.imageCache[action.id]) {
@@ -804,9 +863,31 @@ class CanvasManager {
     ctx.save();
     ctx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
 
-    // Draw virtual canvas background
+    // Draw virtual canvas background (white)
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, this.VIRTUAL_WIDTH, this.VIRTUAL_HEIGHT);
+
+    // Draw background image (nu.png) in each cell at 95% opacity
+    if (this.bgImage) {
+      ctx.save();
+      ctx.globalAlpha = 0.05; // 95% transparent (5% visible)
+      for (let sec = 0; sec < 4; sec++) {
+        const cx = sec * this.CELL_SIZE;
+        // Fit image into the cell maintaining aspect ratio
+        const imgW = this.bgImage.width;
+        const imgH = this.bgImage.height;
+        const scale = Math.min(
+          this.CELL_SIZE / imgW,
+          this.CELL_SIZE / imgH
+        );
+        const drawW = imgW * scale;
+        const drawH = imgH * scale;
+        const offsetX = cx + (this.CELL_SIZE - drawW) / 2;
+        const offsetY = (this.CELL_SIZE - drawH) / 2;
+        ctx.drawImage(this.bgImage, offsetX, offsetY, drawW, drawH);
+      }
+      ctx.restore();
+    }
 
     // Draw grid lines (subtle)
     ctx.strokeStyle = "#e0e0e0";
@@ -835,6 +916,33 @@ class CanvasManager {
       ctx.lineTo(Math.min(this.VIRTUAL_WIDTH, endX), gy);
     }
     ctx.stroke();
+
+    // --- Draw 4 section divider lines (vertical dashes between 2000px cells) ---
+    ctx.strokeStyle = "#333333";
+    ctx.lineWidth = 3 / this.scale;
+    ctx.setLineDash([10 / this.scale, 6 / this.scale]);
+
+    // Vertical lines between sections (at x = 2000, 4000, 6000)
+    for (let sec = 1; sec < 4; sec++) {
+      const x = sec * this.CELL_SIZE;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, this.VIRTUAL_HEIGHT);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // --- Draw section labels ---
+    ctx.font = `${40 / this.scale}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = "#555555";
+
+    for (let sec = 0; sec < 4; sec++) {
+      const cx = sec * this.CELL_SIZE + this.CELL_SIZE / 2;
+      const cy = this.VIRTUAL_HEIGHT - 10 / this.scale;
+      ctx.fillText(this.SECTION_LABELS[sec], cx, cy);
+    }
 
     // Border around virtual canvas
     ctx.strokeStyle = "#333";
@@ -929,6 +1037,34 @@ class CanvasManager {
     // Where content was erased (transparent on offscreen), the white+grid shows through
     // Where content remains, it covers the white+grid
     ctx.drawImage(offscreen, 0, 0);
+
+    // Draw eraser preview circle (size indicator)
+    if (this.eraserPreviewVisible) {
+      ctx.save();
+      ctx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
+      
+      const previewRadius = this.eraserPreviewSize / 2;
+      
+      // Outer circle - semi-transparent blue outline
+      ctx.beginPath();
+      ctx.arc(this.eraserPreviewX, this.eraserPreviewY, previewRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(33, 150, 243, 0.8)";
+      ctx.lineWidth = 2 / this.scale;
+      ctx.stroke();
+      
+      // Crosshair in the center
+      const crossSize = 6 / this.scale;
+      ctx.strokeStyle = "rgba(33, 150, 243, 0.5)";
+      ctx.lineWidth = 1 / this.scale;
+      ctx.beginPath();
+      ctx.moveTo(this.eraserPreviewX - crossSize, this.eraserPreviewY);
+      ctx.lineTo(this.eraserPreviewX + crossSize, this.eraserPreviewY);
+      ctx.moveTo(this.eraserPreviewX, this.eraserPreviewY - crossSize);
+      ctx.lineTo(this.eraserPreviewX, this.eraserPreviewY + crossSize);
+      ctx.stroke();
+      
+      ctx.restore();
+    }
 
     // Draw selection transform handles on the selected image (in transformed space)
     if (this.selectedActionId) {
