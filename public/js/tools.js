@@ -59,10 +59,10 @@ class ToolsManager {
         return;
       }
 
-      // Validate file size (max 4MB raw - base64 encoding adds ~33% overhead,
+      // Validate file size (max 2MB raw - base64 encoding adds ~33% overhead,
       // fitting within the 5MB Socket.IO buffer limit)
-      if (file.size > 4 * 1024 * 1024) {
-        alert("Изображение слишком большое. Максимальный размер — 5 МБ.");
+      if (file.size > 2 * 1024 * 1024) {
+        alert("Изображение слишком большое. Максимальный размер — 2 МБ.");
         this.imageInput.value = "";
         return;
       }
