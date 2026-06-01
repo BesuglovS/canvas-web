@@ -49,21 +49,6 @@ body {
   padding-left: 10px;
 }
 
-#username {
-  background: #0f3460;
-  border: 1px solid #1a4a8a;
-  color: #eee;
-  padding: 5px 10px;
-  border-radius: 4px;
-  font-size: 13px;
-  width: 150px;
-  outline: none;
-}
-
-#username:focus {
-  border-color: #e94560;
-}
-
 .tool-btn {
   background: #0f3460;
   border: 1px solid #1a4a8a;
@@ -331,11 +316,6 @@ body {
   #toolbar {
     padding: 6px 8px;
     gap: 6px;
-  }
-
-  #username {
-    width: 100px;
-    font-size: 12px;
   }
 
   #size-slider {
