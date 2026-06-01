@@ -117,13 +117,21 @@
         <canvas id="draw-canvas"></canvas>
       </div>
 
+      <!-- Countdown -->
+      <div id="countdown">
+        <span id="countdown-value">00:00:00</span>
+        <span id="countdown-label">до выпуска</span>
+      </div>
+
       <!-- Info overlay -->
       <div id="info-overlay">
-        <span>Зажмите <kbd>Пробел</kbd> + перетаскивание для перемещения | Колесико для масштабирования</span>
+        <span class="hint-desktop">Зажмите <kbd>Пробел</kbd> + перетаскивание для перемещения | Колесико для масштабирования</span>
+        <span class="hint-touch">👆 Рисование одним пальцем, ✌️ Перемещение/масштаб двумя</span>
       </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="js/countdown.js"></script>
     <script src="js/canvas.js"></script>
     <script src="js/tools.js"></script>
     <script src="js/websocket.js"></script>

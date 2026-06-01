@@ -89,7 +89,29 @@ class CanvasManager {
     const rect = this.container.getBoundingClientRect();
     this.canvas.width = rect.width;
     this.canvas.height = rect.height;
+    this.fitToScreen();
     this.render();
+  }
+
+  fitToScreen() {
+    const rect = this.container.getBoundingClientRect();
+    const padding = 40; // padding in pixels around the virtual canvas
+    const availW = rect.width - padding * 2;
+    const availH = rect.height - padding * 2;
+
+    if (availW <= 0 || availH <= 0) return;
+
+    const scaleX = availW / this.VIRTUAL_WIDTH;
+    const scaleY = availH / this.VIRTUAL_HEIGHT;
+    this.scale = Math.min(scaleX, scaleY, 1); // cap at 1x so it doesn't blow up too much
+
+    // Center the virtual canvas in the container
+    const scaledW = this.VIRTUAL_WIDTH * this.scale;
+    const scaledH = this.VIRTUAL_HEIGHT * this.scale;
+    this.offsetX = (rect.width - scaledW) / 2;
+    this.offsetY = (rect.height - scaledH) / 2;
+
+    this.updateZoomLabel();
   }
 
   bindEvents() {
