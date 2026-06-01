@@ -56,6 +56,9 @@ io.on("connection", (socket) => {
       data.id =
         Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     }
+    if (!data.time) {
+      data.time = Date.now();
+    }
     canvasActions.push(data);
     socket.broadcast.emit("draw", data);
     saveCanvasData();
@@ -67,6 +70,9 @@ io.on("connection", (socket) => {
       data.id =
         Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     }
+    if (!data.time) {
+      data.time = Date.now();
+    }
     canvasActions.push(data);
     socket.broadcast.emit("image", data);
     saveCanvasData();
@@ -77,6 +83,9 @@ io.on("connection", (socket) => {
     if (!data.id) {
       data.id =
         Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+    if (!data.time) {
+      data.time = Date.now();
     }
     canvasActions.push(data);
     socket.broadcast.emit("text", data);

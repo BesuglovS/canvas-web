@@ -155,6 +155,7 @@ class ToolsManager {
       points: [{ x, y }],
       username: "Anonymous",
       id: this._generateId(),
+      time: Date.now(),
     };
   }
 
@@ -225,6 +226,7 @@ class ToolsManager {
       font: font || "Arial",
       username: "Anonymous",
       id: this._generateId(),
+      time: Date.now(),
     };
 
     this.actions.push(textAction);
@@ -244,6 +246,7 @@ class ToolsManager {
       data: data,
       username: "Anonymous",
       id: this._generateId(),
+      time: Date.now(),
     };
 
     this.actions.push(imageAction);
