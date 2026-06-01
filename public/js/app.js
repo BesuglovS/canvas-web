@@ -299,7 +299,7 @@ class App {
     if (isTouch) {
       this.showTouchTextPopup(x, y);
     } else {
-      const text = prompt("Enter text:", "");
+      const text = prompt("Введите текст:", "");
       if (text && text.trim()) {
         const tool = this.toolsManager;
         const size = Math.max(12, tool.size * 3);
@@ -406,19 +406,19 @@ class App {
 
     const input = document.createElement("input");
     input.type = "text";
-    input.placeholder = "Enter text...";
+    input.placeholder = "Введите текст...";
     input.autofocus = true;
 
     const actionsDiv = document.createElement("div");
     actionsDiv.className = "popup-actions";
 
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Cancel";
+    cancelBtn.textContent = "Отмена";
     cancelBtn.addEventListener("click", () => popup.remove());
 
     const okBtn = document.createElement("button");
     okBtn.className = "primary";
-    okBtn.textContent = "OK";
+    okBtn.textContent = "ОК";
     okBtn.addEventListener("click", () => {
       const text = input.value;
       if (text.trim()) {

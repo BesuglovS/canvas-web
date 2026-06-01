@@ -54,14 +54,15 @@ class ToolsManager {
 
       // Validate file type
       if (!file.type.startsWith("image/")) {
-        alert("Please select an image file (JPG, PNG, etc.)");
+        alert("Пожалуйста, выберите файл изображения (JPG, PNG, GIF, WebP)");
         this.imageInput.value = "";
         return;
       }
 
-      // Validate file size (max 1MB - to fit within Socket.IO buffer limits)
-      if (file.size > 1 * 1024 * 1024) {
-        alert("Image is too large. Maximum size is 1 MB.");
+      // Validate file size (max 4MB raw - base64 encoding adds ~33% overhead,
+      // fitting within the 5MB Socket.IO buffer limit)
+      if (file.size > 4 * 1024 * 1024) {
+        alert("Изображение слишком большое. Максимальный размер — 5 МБ.");
         this.imageInput.value = "";
         return;
       }
@@ -75,7 +76,7 @@ class ToolsManager {
         }
       };
       reader.onerror = () => {
-        alert("Failed to read the image file.");
+        alert("Не удалось прочитать файл изображения.");
         this.imageInput.value = "";
       };
       reader.readAsDataURL(file);
@@ -93,7 +94,7 @@ class ToolsManager {
       if (this.currentTool === "eraser") {
         this.eraserSize = this.size;
       }
-      this.sizeLabel.textContent = "Size: " + this.size;
+      this.sizeLabel.textContent = "Толщина: " + this.size;
 
       // Notify size change callback (for live preview updates)
       if (this.onSizeChange) {
@@ -117,13 +118,13 @@ class ToolsManager {
     if (tool === "eraser") {
       this.sizeSlider.max = 200;
       this.eraserSize = this.size;
-      this.sizeLabel.textContent = "Size: " + this.eraserSize;
+      this.sizeLabel.textContent = "Толщина: " + this.eraserSize;
     } else {
       this.sizeSlider.max = 100;
       if (this.size > 100) {
         this.size = Math.min(this.size, 100);
         this.sizeSlider.value = this.size;
-        this.sizeLabel.textContent = "Size: " + this.size;
+        this.sizeLabel.textContent = "Толщина: " + this.size;
       }
     }
 
@@ -152,7 +153,7 @@ class ToolsManager {
       color: this.color,
       size: toolSize,
       points: [{ x, y }],
-      username: document.getElementById("username").value || "Anonymous",
+      username: "Anonymous",
       id: this._generateId(),
     };
   }
@@ -222,7 +223,7 @@ class ToolsManager {
       color: color,
       size: size,
       font: font || "Arial",
-      username: document.getElementById("username").value || "Anonymous",
+      username: "Anonymous",
       id: this._generateId(),
     };
 
@@ -241,7 +242,7 @@ class ToolsManager {
       width: width,
       height: height,
       data: data,
-      username: document.getElementById("username").value || "Anonymous",
+      username: "Anonymous",
       id: this._generateId(),
     };
 
