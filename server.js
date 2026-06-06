@@ -11,7 +11,7 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, "canvas-data.json");
+const DATA_FILE = path.join(__dirname, "public", "canvas-data.json");
 
 app.use(express.static(path.join(__dirname, "public")));
 
