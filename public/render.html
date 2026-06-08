@@ -93,10 +93,6 @@
         flex: 1;
         overflow: hidden;
         position: relative;
-        cursor: grab;
-      }
-      #canvas-container.panning {
-        cursor: grabbing;
       }
       #draw-canvas {
         width: 100%;
@@ -201,6 +197,9 @@
             <option value="50">50×</option>
             <option value="100">100×</option>
           </select>
+
+          <button id="btn-reload" class="render-btn success" title="Загрузить актуальные данные из памяти сервера">⟳</button>
+          <button id="btn-flush" class="render-btn" title="Сбросить данные из памяти на диск" style="background:#f57c00;">💾</button>
 
           <button id="btn-record" class="render-btn danger" title="Запись видео (WebM)">
             <span id="recording-indicator"></span>Запись

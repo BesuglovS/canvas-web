@@ -38,6 +38,15 @@ class RenderPlayer {
     this.allActions = [];
     this.imageCache = {};
 
+    // Incremental rendering state
+    this.lastRenderedIndex = 0;       // how many actions have been drawn on persistentOffscreen
+    this.needsFullRedraw = true;      // e.g. after resize, seek, pan/zoom
+    this.persistentOffscreen = null;  // offscreen canvas that accumulates actions
+    this.lastTransformKey = "";       // to detect pan/zoom changes
+    this.backgroundOffscreen = null;  // cached static background
+    this.backgroundCacheKey = "";     // key to detect background cache invalidation
+    this._actionAccumulator = 0;      // fractional action counter for smooth playback
+
     // Playback state
     this.currentIndex = 0;        // how many actions have been rendered
     this.isPlaying = false;
@@ -71,6 +80,8 @@ class RenderPlayer {
     this.btnSkipPrev = document.getElementById("btn-skip-prev");
     this.btnSkipNext = document.getElementById("btn-skip-next");
     this.recordingIndicator = document.getElementById("recording-indicator");
+    this.btnReload = document.getElementById("btn-reload");
+    this.btnFlush = document.getElementById("btn-flush");
 
     this.bindEvents();
     this.resize();
@@ -82,10 +93,225 @@ class RenderPlayer {
     img.onload = () => {
       this.bgImage = img;
       this.bgImageLoaded = true;
+      this.needsFullRedraw = true;
       this._renderCurrentState();
     };
     img.onerror = () => { this.bgImageLoaded = false; };
     img.src = "nu.png";
+  }
+
+  _getTransformKey() {
+    return `${this.scale.toFixed(4)}|${this.offsetX.toFixed(2)}|${this.offsetY.toFixed(2)}|${this.canvas.width}|${this.canvas.height}`;
+  }
+
+  _ensurePersistentOffscreen() {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (!this.persistentOffscreen || this.persistentOffscreen.width !== w || this.persistentOffscreen.height !== h) {
+      this.persistentOffscreen = document.createElement("canvas");
+      this.persistentOffscreen.width = w;
+      this.persistentOffscreen.height = h;
+      this.needsFullRedraw = true;
+    }
+  }
+
+  _renderOneAction(ctx, action) {
+    if (action.type === "stroke" && action.tool === "eraser") {
+      ctx.beginPath();
+      ctx.lineWidth = action.size;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = "rgba(0,0,0,1)";
+      const pts = action.points;
+      if (pts.length > 0) {
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.stroke();
+    } else if (action.type === "stroke") {
+      ctx.beginPath();
+      ctx.strokeStyle = action.color;
+      ctx.lineWidth = action.size;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalCompositeOperation = "source-over";
+      const pts = action.points;
+      if (pts.length > 0) {
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.stroke();
+    } else if (action.type === "text") {
+      const s = action.scale || 1;
+      ctx.font = `${action.size * s}px ${action.font || "Arial"}`;
+      ctx.fillStyle = action.color;
+      ctx.textBaseline = "top";
+      ctx.globalCompositeOperation = "source-over";
+      const lines = action.text.split("\n");
+      const lineHeight = action.size * s * 1.2;
+      lines.forEach((line, i) => {
+        ctx.fillText(line, action.x, action.y + i * lineHeight);
+      });
+    } else if (action.type === "image") {
+      ctx.globalCompositeOperation = "source-over";
+      const img = this.imageCache[action.id];
+      if (img) {
+        ctx.drawImage(img, action.x, action.y, action.width, action.height);
+      } else if (img === null) {
+        ctx.fillStyle = "#cccccc";
+        ctx.fillRect(action.x, action.y, action.width, action.height);
+        ctx.strokeStyle = "#ff0000";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(action.x, action.y, action.width, action.height);
+      } else {
+        ctx.fillStyle = "#eeeeee";
+        ctx.fillRect(action.x, action.y, action.width, action.height);
+        ctx.strokeStyle = "#999";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(action.x, action.y, action.width, action.height);
+      }
+    }
+  }
+
+  _renderCurrentState() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    this._ensurePersistentOffscreen();
+    const offscreen = this.persistentOffscreen;
+
+    const transformKey = this._getTransformKey();
+    if (transformKey !== this.lastTransformKey) {
+      this.needsFullRedraw = true;
+      this.lastTransformKey = transformKey;
+    }
+
+    // ---- Step 1: draw cached static background ----
+    ctx.fillStyle = "#2d2d44";
+    ctx.fillRect(0, 0, w, h);
+
+    const bgKey = `${this.scale.toFixed(4)}|${this.offsetX.toFixed(2)}|${this.offsetY.toFixed(2)}|${w}|${h}|${this.bgImageLoaded}`;
+    if (!this.backgroundOffscreen || this.backgroundCacheKey !== bgKey) {
+      this.backgroundCacheKey = bgKey;
+      if (!this.backgroundOffscreen || this.backgroundOffscreen.width !== w || this.backgroundOffscreen.height !== h) {
+        this.backgroundOffscreen = document.createElement("canvas");
+        this.backgroundOffscreen.width = w;
+        this.backgroundOffscreen.height = h;
+      }
+      const bgCtx = this.backgroundOffscreen.getContext("2d");
+      bgCtx.clearRect(0, 0, w, h);
+      bgCtx.save();
+      bgCtx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
+
+      // White virtual canvas background
+      bgCtx.fillStyle = "#ffffff";
+      bgCtx.fillRect(0, 0, this.VIRTUAL_WIDTH, this.VIRTUAL_HEIGHT);
+
+      // Section background images
+      if (this.bgImage && this.bgImageLoaded) {
+        bgCtx.save();
+        bgCtx.globalAlpha = 0.05;
+        for (let sec = 0; sec < 4; sec++) {
+          const cx = sec * this.CELL_SIZE;
+          const scale = Math.min(this.CELL_SIZE / this.bgImage.width, this.CELL_SIZE / this.bgImage.height);
+          const drawW = this.bgImage.width * scale;
+          const drawH = this.bgImage.height * scale;
+          const ox = cx + (this.CELL_SIZE - drawW) / 2;
+          const oy = (this.CELL_SIZE - drawH) / 2;
+          bgCtx.drawImage(this.bgImage, ox, oy, drawW, drawH);
+        }
+        bgCtx.restore();
+      }
+
+      // Grid
+      bgCtx.strokeStyle = "#e0e0e0";
+      bgCtx.lineWidth = 0.5 / this.scale;
+      const gridStep = 100;
+      const startX = Math.max(0, -this.offsetX / this.scale);
+      const startY = Math.max(0, -this.offsetY / this.scale);
+      const endX = Math.min(this.VIRTUAL_WIDTH, (w - this.offsetX) / this.scale);
+      const endY = Math.min(this.VIRTUAL_HEIGHT, (h - this.offsetY) / this.scale);
+      bgCtx.beginPath();
+      for (let gx = Math.floor(startX / gridStep) * gridStep; gx <= endX; gx += gridStep) {
+        bgCtx.moveTo(gx, Math.max(0, startY));
+        bgCtx.lineTo(gx, Math.min(this.VIRTUAL_HEIGHT, endY));
+      }
+      for (let gy = Math.floor(startY / gridStep) * gridStep; gy <= endY; gy += gridStep) {
+        bgCtx.moveTo(Math.max(0, startX), gy);
+        bgCtx.lineTo(Math.min(this.VIRTUAL_WIDTH, endX), gy);
+      }
+      bgCtx.stroke();
+
+      // Section dividers
+      bgCtx.strokeStyle = "#333333";
+      bgCtx.lineWidth = 3 / this.scale;
+      bgCtx.setLineDash([10 / this.scale, 6 / this.scale]);
+      for (let sec = 1; sec < 4; sec++) {
+        const x = sec * this.CELL_SIZE;
+        bgCtx.beginPath();
+        bgCtx.moveTo(x, 0);
+        bgCtx.lineTo(x, this.VIRTUAL_HEIGHT);
+        bgCtx.stroke();
+      }
+      bgCtx.setLineDash([]);
+
+      // Section labels
+      bgCtx.font = `${40 / this.scale}px Arial, sans-serif`;
+      bgCtx.textAlign = "center";
+      bgCtx.textBaseline = "bottom";
+      bgCtx.fillStyle = "#555555";
+      for (let sec = 0; sec < 4; sec++) {
+        bgCtx.fillText(this.SECTION_LABELS[sec], sec * this.CELL_SIZE + this.CELL_SIZE / 2, this.VIRTUAL_HEIGHT - 10 / this.scale);
+      }
+
+      // Border
+      bgCtx.strokeStyle = "#333";
+      bgCtx.lineWidth = 2 / this.scale;
+      bgCtx.strokeRect(0, 0, this.VIRTUAL_WIDTH, this.VIRTUAL_HEIGHT);
+
+      bgCtx.restore();
+    }
+    // Draw cached background onto main canvas
+    ctx.drawImage(this.backgroundOffscreen, 0, 0);
+
+    // ---- Step 2: render actions incrementally on offscreen canvas ----
+    const offCtx = offscreen.getContext("2d");
+
+    if (this.needsFullRedraw) {
+      // Clear offscreen in pixel space (identity transform), then set transform
+      offCtx.setTransform(1, 0, 0, 1, 0, 0);
+      offCtx.clearRect(0, 0, w, h);
+      offCtx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
+      this.lastRenderedIndex = 0;
+      this.needsFullRedraw = false;
+    }
+
+    // Render only new actions since lastRenderedIndex
+    if (this.currentIndex > this.lastRenderedIndex) {
+      offCtx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
+      for (let i = this.lastRenderedIndex; i < this.currentIndex; i++) {
+        this._renderOneAction(offCtx, this.allActions[i]);
+      }
+      this.lastRenderedIndex = this.currentIndex;
+    }
+
+    // Handle reverse skipping (currentIndex < lastRenderedIndex)
+    if (this.currentIndex < this.lastRenderedIndex) {
+      // Must do full redraw for backward seeks — they are user-initiated and rare
+      offCtx.setTransform(1, 0, 0, 1, 0, 0);
+      offCtx.clearRect(0, 0, w, h);
+      offCtx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
+      this.lastRenderedIndex = 0;
+      for (let i = 0; i < this.currentIndex; i++) {
+        this._renderOneAction(offCtx, this.allActions[i]);
+      }
+      this.lastRenderedIndex = this.currentIndex;
+    }
+
+    // ---- Step 3: compose offscreen onto main canvas ----
+    ctx.drawImage(offscreen, 0, 0);
   }
 
   resize() {
@@ -93,6 +319,10 @@ class RenderPlayer {
     this.canvas.width = rect.width;
     this.canvas.height = rect.height;
     this._fitToScreen();
+    // Invalidate persistent offscreen — it will be recreated on next render
+    this.persistentOffscreen = null;
+    this.lastTransformKey = "";
+    this.needsFullRedraw = true;
     this._renderCurrentState();
   }
 
@@ -140,6 +370,12 @@ class RenderPlayer {
 
     // Record button
     this.btnRecord.addEventListener("click", () => this.toggleRecording());
+
+    // Reload from server memory
+    this.btnReload.addEventListener("click", () => this.reloadFromMemory());
+
+    // Force flush to disk
+    this.btnFlush.addEventListener("click", () => this.flushToDisk());
 
     // Pan and zoom — mouse events on canvas container
     this.container.addEventListener("mousedown", (e) => this._handleMouseDown(e));
@@ -200,6 +436,8 @@ class RenderPlayer {
       this.container.classList.remove("panning");
       e.preventDefault();
     }
+  }
+
   _handleWheel(e) {
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -276,8 +514,15 @@ class RenderPlayer {
   async loadData() {
     try {
       this.renderEmpty.textContent = "Загрузка данных...";
-      const resp = await fetch("/canvas-data.json");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      // Try loading from server memory first (always up-to-date),
+      // fall back to static file if the API endpoint is unavailable (e.g., old server)
+      let resp = await fetch("/api/actions");
+      if (!resp.ok) {
+        console.warn("/api/actions unavailable, falling back to canvas-data.json");
+        resp = await fetch("/canvas-data.json");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      }
       const data = await resp.json();
 
       if (!Array.isArray(data) || data.length === 0) {
@@ -310,6 +555,8 @@ class RenderPlayer {
       // Preload images
       this._preloadImages(() => {
         this.currentIndex = 0;
+        this.lastRenderedIndex = 0;
+        this.needsFullRedraw = true;
         this._updateUI();
         this._renderCurrentState();
       });
@@ -379,7 +626,10 @@ class RenderPlayer {
     if (this.currentIndex >= this.allActions.length) {
       this.currentIndex = 0;
       this.elapsedPlayMs = 0;
+      this.lastRenderedIndex = 0;
+      this.needsFullRedraw = true;
     }
+    this._actionAccumulator = 0;
     this.isPlaying = true;
     this.isPaused = false;
     this.lastFrameTimestamp = performance.now();
@@ -394,21 +644,20 @@ class RenderPlayer {
     const delta = now - this.lastFrameTimestamp;
     this.lastFrameTimestamp = now;
 
-    // Advance elapsed time in action time scale
-    const deltaMs = delta * this.speed;
-
-    // Determine target index based on elapsed time
-    if (this.playbackDuration > 0) {
-      this.elapsedPlayMs += deltaMs;
+    // Action-based advancement: each frame advances by 'speed' actions per frame.
+    // This ensures consistent playback speed regardless of action timestamp spread
+    // (e.g., actions recorded over days/weeks won't slow down the replay).
+    // Use a fractional accumulator so speeds < 1 still work smoothly.
+    this._actionAccumulator += this.speed / 20;
+    const advance = Math.floor(this._actionAccumulator);
+    if (advance > 0) {
+      this._actionAccumulator -= advance;
+      this.currentIndex = Math.min(this.currentIndex + advance, this.allActions.length);
     }
-
-    // Calculate how many actions we should have rendered based on elapsed time
-    const fraction = Math.min(1, Math.max(0, this.elapsedPlayMs / this.playbackDuration));
-    const targetIndex = Math.floor(fraction * this.allActions.length);
-
-    if (targetIndex > this.currentIndex) {
-      this.currentIndex = Math.min(targetIndex, this.allActions.length);
-    }
+    // Update elapsed time for progress bar consistency
+    this.elapsedPlayMs = this.allActions.length > 0
+      ? (this.currentIndex / this.allActions.length) * this.playbackDuration
+      : 0;
 
     // Render and update UI
     this._renderCurrentState();
@@ -440,7 +689,10 @@ class RenderPlayer {
     }
     this.currentIndex = 0;
     this.elapsedPlayMs = 0;
+    this._actionAccumulator = 0;
     this.btnPlay.textContent = "▶";
+    this.needsFullRedraw = true;
+    this.lastRenderedIndex = 0;
     this._renderCurrentState();
     this._updateUI();
   }
@@ -462,161 +714,16 @@ class RenderPlayer {
     this.currentIndex = Math.max(0, Math.min(index, this.allActions.length));
     const fraction = this.allActions.length > 0 ? this.currentIndex / this.allActions.length : 0;
     this.elapsedPlayMs = fraction * this.playbackDuration;
+    this._actionAccumulator = 0;
+    this.needsFullRedraw = true;
     this._renderCurrentState();
     this._updateUI();
   }
 
   // --- Rendering ---
 
-  _renderCurrentState() {
-    const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-    const actionsToRender = this.allActions.slice(0, this.currentIndex);
-
-    // Clear
-    ctx.fillStyle = "#2d2d44";
-    ctx.fillRect(0, 0, w, h);
-
-    ctx.save();
-    ctx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
-
-    // White virtual canvas background
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, this.VIRTUAL_WIDTH, this.VIRTUAL_HEIGHT);
-
-    // Section background images
-    if (this.bgImage && this.bgImageLoaded) {
-      ctx.save();
-      ctx.globalAlpha = 0.05;
-      for (let sec = 0; sec < 4; sec++) {
-        const cx = sec * this.CELL_SIZE;
-        const scale = Math.min(this.CELL_SIZE / this.bgImage.width, this.CELL_SIZE / this.bgImage.height);
-        const drawW = this.bgImage.width * scale;
-        const drawH = this.bgImage.height * scale;
-        const ox = cx + (this.CELL_SIZE - drawW) / 2;
-        const oy = (this.CELL_SIZE - drawH) / 2;
-        ctx.drawImage(this.bgImage, ox, oy, drawW, drawH);
-      }
-      ctx.restore();
-    }
-
-    // Grid
-    ctx.strokeStyle = "#e0e0e0";
-    ctx.lineWidth = 0.5 / this.scale;
-    const gridStep = 100;
-    const startX = Math.max(0, -this.offsetX / this.scale);
-    const startY = Math.max(0, -this.offsetY / this.scale);
-    const endX = Math.min(this.VIRTUAL_WIDTH, (w - this.offsetX) / this.scale);
-    const endY = Math.min(this.VIRTUAL_HEIGHT, (h - this.offsetY) / this.scale);
-    ctx.beginPath();
-    for (let gx = Math.floor(startX / gridStep) * gridStep; gx <= endX; gx += gridStep) {
-      ctx.moveTo(gx, Math.max(0, startY));
-      ctx.lineTo(gx, Math.min(this.VIRTUAL_HEIGHT, endY));
-    }
-    for (let gy = Math.floor(startY / gridStep) * gridStep; gy <= endY; gy += gridStep) {
-      ctx.moveTo(Math.max(0, startX), gy);
-      ctx.lineTo(Math.min(this.VIRTUAL_WIDTH, endX), gy);
-    }
-    ctx.stroke();
-
-    // Section dividers
-    ctx.strokeStyle = "#333333";
-    ctx.lineWidth = 3 / this.scale;
-    ctx.setLineDash([10 / this.scale, 6 / this.scale]);
-    for (let sec = 1; sec < 4; sec++) {
-      const x = sec * this.CELL_SIZE;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, this.VIRTUAL_HEIGHT);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-
-    // Section labels
-    ctx.font = `${40 / this.scale}px Arial, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = "#555555";
-    for (let sec = 0; sec < 4; sec++) {
-      ctx.fillText(this.SECTION_LABELS[sec], sec * this.CELL_SIZE + this.CELL_SIZE / 2, this.VIRTUAL_HEIGHT - 10 / this.scale);
-    }
-
-    // Border
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 2 / this.scale;
-    ctx.strokeRect(0, 0, this.VIRTUAL_WIDTH, this.VIRTUAL_HEIGHT);
-
-    ctx.restore();
-
-    // Offscreen canvas for action rendering (same as CanvasManager)
-    const offscreen = document.createElement("canvas");
-    offscreen.width = w;
-    offscreen.height = h;
-    const offCtx = offscreen.getContext("2d");
-    offCtx.setTransform(this.scale, 0, 0, this.scale, this.offsetX, this.offsetY);
-
-    for (const action of actionsToRender) {
-      if (action.type === "stroke" && action.tool === "eraser") {
-        offCtx.beginPath();
-        offCtx.lineWidth = action.size;
-        offCtx.lineCap = "round";
-        offCtx.lineJoin = "round";
-        offCtx.globalCompositeOperation = "destination-out";
-        offCtx.strokeStyle = "rgba(0,0,0,1)";
-        const pts = action.points;
-        if (pts.length > 0) {
-          offCtx.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) offCtx.lineTo(pts[i].x, pts[i].y);
-        }
-        offCtx.stroke();
-      } else if (action.type === "stroke") {
-        offCtx.beginPath();
-        offCtx.strokeStyle = action.color;
-        offCtx.lineWidth = action.size;
-        offCtx.lineCap = "round";
-        offCtx.lineJoin = "round";
-        offCtx.globalCompositeOperation = "source-over";
-        const pts = action.points;
-        if (pts.length > 0) {
-          offCtx.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) offCtx.lineTo(pts[i].x, pts[i].y);
-        }
-        offCtx.stroke();
-      } else if (action.type === "text") {
-        const s = action.scale || 1;
-        offCtx.font = `${action.size * s}px ${action.font || "Arial"}`;
-        offCtx.fillStyle = action.color;
-        offCtx.textBaseline = "top";
-        offCtx.globalCompositeOperation = "source-over";
-        const lines = action.text.split("\n");
-        const lineHeight = action.size * s * 1.2;
-        lines.forEach((line, i) => {
-          offCtx.fillText(line, action.x, action.y + i * lineHeight);
-        });
-      } else if (action.type === "image") {
-        offCtx.globalCompositeOperation = "source-over";
-        const img = this.imageCache[action.id];
-        if (img) {
-          offCtx.drawImage(img, action.x, action.y, action.width, action.height);
-        } else if (img === null) {
-          offCtx.fillStyle = "#cccccc";
-          offCtx.fillRect(action.x, action.y, action.width, action.height);
-          offCtx.strokeStyle = "#ff0000";
-          offCtx.lineWidth = 2;
-          offCtx.strokeRect(action.x, action.y, action.width, action.height);
-        } else {
-          offCtx.fillStyle = "#eeeeee";
-          offCtx.fillRect(action.x, action.y, action.width, action.height);
-          offCtx.strokeStyle = "#999";
-          offCtx.lineWidth = 1;
-          offCtx.strokeRect(action.x, action.y, action.width, action.height);
-        }
-      }
-    }
-
-    ctx.drawImage(offscreen, 0, 0);
-  }
+  // _renderCurrentState, _renderOneAction, _getTransformKey, _ensurePersistentOffscreen
+  // are defined above (after constructor) for clarity.
 
   // --- UI Updates ---
 
@@ -648,6 +755,93 @@ class RenderPlayer {
     const min = Math.floor(totalSec / 60);
     const sec = totalSec % 60;
     return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  }
+
+  // --- Reload from server memory ---
+
+  async reloadFromMemory() {
+    // Stop playback if active
+    if (this.isPlaying || this.isPaused) {
+      this.isPlaying = false;
+      this.isPaused = false;
+      if (this.animationFrameId) {
+        cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
+      this.btnPlay.textContent = "▶";
+    }
+
+    const originalCount = this.allActions.length;
+    this.renderEmpty.textContent = "Загрузка актуальных данных...";
+
+    try {
+      const resp = await fetch("/api/actions");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      if (!Array.isArray(data)) {
+        throw new Error("Некорректный формат данных");
+      }
+
+      this.allActions = data;
+
+      // Sort by time
+      this.allActions.sort((a, b) => {
+        if (a.time === undefined && b.time === undefined) return 0;
+        if (a.time === undefined) return 1;
+        if (b.time === undefined) return -1;
+        return a.time - b.time;
+      });
+
+      // Determine time range
+      this.actionsStartTime = this.allActions[0]?.time || 0;
+      let lastTimedIdx = this.allActions.length - 1;
+      while (lastTimedIdx >= 0 && this.allActions[lastTimedIdx].time === undefined) {
+        lastTimedIdx--;
+      }
+      this.actionsEndTime = lastTimedIdx >= 0 ? this.allActions[lastTimedIdx].time : this.actionsStartTime;
+      this.playbackDuration = Math.max(1, this.actionsEndTime - this.actionsStartTime);
+
+      // Reset playback state
+      this.currentIndex = 0;
+      this.elapsedPlayMs = 0;
+      this.lastRenderedIndex = 0;
+      this.needsFullRedraw = true;
+      this.imageCache = {};
+
+      // Preload images and re-render
+      this._preloadImages(() => {
+        this._updateUI();
+        this._renderCurrentState();
+        this.renderEmpty.textContent = "";
+      });
+
+      const newCount = this.allActions.length;
+      if (newCount > originalCount) {
+        console.log(`Загружено ${newCount - originalCount} новых действий из памяти сервера`);
+      }
+    } catch (err) {
+      console.error("Failed to reload actions from memory:", err);
+      this.renderEmpty.textContent = "Ошибка загрузки данных из памяти.";
+    }
+  }
+
+  // --- Force flush to disk ---
+
+  async flushToDisk() {
+    try {
+      const resp = await fetch("/api/flush", { method: "POST" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json();
+      console.log(`Flushed to disk: ${result.count} actions saved`);
+      // Brief visual feedback on the button
+      this.btnFlush.style.background = "#4caf50";
+      setTimeout(() => { this.btnFlush.style.background = "#f57c00"; }, 1000);
+    } catch (err) {
+      console.error("Flush failed:", err);
+      this.btnFlush.style.background = "#d32f2f";
+      setTimeout(() => { this.btnFlush.style.background = "#f57c00"; }, 1000);
+    }
   }
 
   // --- Video Recording ---

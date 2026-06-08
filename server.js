@@ -13,10 +13,39 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, "public", "canvas-data.json");
 
-app.use(express.static(path.join(__dirname, "public")));
-
 // Storage for all drawing actions
 let canvasActions = [];
+
+// API endpoint that returns current actions from server memory (not from file cache)
+app.get("/api/actions", (req, res) => {
+  res.json(canvasActions);
+});
+
+// Force immediate flush to disk
+app.post("/api/flush", (req, res) => {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(canvasActions), "utf-8");
+    console.log(`Manual flush: saved ${canvasActions.length} actions to file`);
+    res.json({ ok: true, count: canvasActions.length });
+  } catch (err) {
+    console.error("Manual flush error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.use(express.static(path.join(__dirname, "public"), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("canvas-data.json")) {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+  },
+}));
 
 // Load saved data if exists
 if (fs.existsSync(DATA_FILE)) {
@@ -30,7 +59,7 @@ if (fs.existsSync(DATA_FILE)) {
   }
 }
 
-// Debounced save to file
+// Save to file (immediate write with small coalescing window to batch rapid actions)
 let saveTimeout = null;
 function saveCanvasData() {
   if (saveTimeout) clearTimeout(saveTimeout);
@@ -41,8 +70,33 @@ function saveCanvasData() {
     } catch (err) {
       console.error("Error saving canvas data:", err.message);
     }
-  }, 2000);
+  }, 200);
 }
+
+// --- Graceful shutdown: flush in-memory data to disk immediately ---
+function flushAndExit(signal) {
+  // Cancel any pending deferred save and write immediately
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(canvasActions), "utf-8");
+    console.log(`Flushed ${canvasActions.length} actions to file before shutdown (${signal})`);
+  } catch (err) {
+    console.error("Error flushing canvas data on shutdown:", err.message);
+  }
+  process.exit(0);
+}
+
+// SIGTERM – sent by pm2 stop / systemctl stop / docker stop
+process.on("SIGTERM", () => flushAndExit("SIGTERM"));
+
+// SIGINT – Ctrl+C in terminal
+process.on("SIGINT", () => flushAndExit("SIGINT"));
+
+// SIGUSR2 – sent by nodemon / pm2 reload in some configurations
+process.on("SIGUSR2", () => flushAndExit("SIGUSR2"));
 
 io.on("connection", (socket) => {
   console.log(`User connected: ${socket.id}`);
