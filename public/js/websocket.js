@@ -3,9 +3,16 @@
  */
 class WebSocketManager {
   constructor() {
-    this.socket = io();
+    // Кука auth_session уходит на тот же домен; сервер проверяет её на handshake.
+    this.socket = io({ withCredentials: true });
+    this.onUnauthorized = null;
     this.setupListeners();
   }
+
+  setupListeners() {
+    this.socket.on("connect_error", (err) => {
+      if (this.onUnauthorized) this.onUnauthorized(err);
+    });
 
   setupListeners() {
     // Initial data

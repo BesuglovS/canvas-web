@@ -6,6 +6,11 @@ class App {
     this.canvasManager = new CanvasManager("canvas-container", "draw-canvas");
     this.toolsManager = new ToolsManager();
     this.wsManager = new WebSocketManager();
+    this.wsManager.onUnauthorized = () => {
+      window.location.href =
+        "https://auth.nayanovaacademy.ru/index.php?page=login&redirect=" +
+        encodeURIComponent(window.location.href);
+    };
     this.undoRedoManager = new UndoRedoManager();
 
     // UI buttons
@@ -462,7 +467,25 @@ class App {
   }
 }
 
-// Initialize the app when DOM is ready
-document.addEventListener("DOMContentLoaded", () => {
+// Initialize the app when DOM is ready (только после проверки SSO-сессии).
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    const response = await fetch("/sandbox/auth_check.php", {
+      credentials: "same-origin",
+    });
+    const data = await response.json();
+    if (!data.authenticated) {
+      window.location.href =
+        "https://auth.nayanovaacademy.ru/index.php?page=login&redirect=" +
+        encodeURIComponent(window.location.href);
+      return;
+    }
+  } catch (error) {
+    // auth-web недоступен — не рисуем на общем холсте анонимно
+    document.body.innerHTML =
+      '<div style="padding:40px;font-family:sans-serif;text-align:center">' +
+      "Не удалось проверить авторизацию. Обновите страницу позже.</div>";
+    return;
+  }
   new App();
 });
